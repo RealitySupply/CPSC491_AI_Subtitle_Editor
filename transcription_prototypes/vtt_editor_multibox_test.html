@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>VTT Subtitle/Captions Editor</title>
+    <style>
+      .current-timestamp {
+        background-color: lightblue; /* Choose a color that suits your design */
+        color: black;
+      }
+
+      #vttContent {
+        width: 100%;
+        box-sizing: border-box;
+        overflow-y: scroll; /* Enable vertical scrolling */
+        display: none; /* This hides the textarea */
+      }
+
+      #vttContainer {
+        height: 300px; /* Adjust as needed */
+        overflow-y: auto;
+      }
+
+      #vttContainer div {
+        display: flex;
+        margin-bottom: 5px;
+      }
+
+      #vttContainer input {
+        width: 100px;
+        margin-right: 5px;
+      }
+
+      #vttContainer textarea {
+        flex-grow: 1;
+        height: 50px; /* Set this to a suitable height */
+        overflow: hidden; /* Prevents internal scrolling */
+        resize: none; /* Optional: Prevents the user from resizing the textarea */
+      }
+      video {
+        display: block;
+        margin: 0 auto;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Select Video File</h1>
+    <input
+      type="file"
+      id="videoInput"
+      accept="video/*"
+      onchange="loadVideoFile(event)"
+    />
+    <br /><br />
+    <h1>Select Subtitle File</h1>
+    <input
+      type="file"
+      id="vttInput"
+      accept=".vtt"
+      onchange="loadVTTFile(event)"
+    />
+    <br /><br />
+    <video
+      id="videoPlayer"
+      width="800"
+      display="block"
+      controls
+      onloadedmetadata="adjustTextAreaWidth()"
+    ></video>
+    <br />
+    <button onclick="updateSubtitles()">Update Subtitles</button>
+    <br />
+    <div id="vttContainer"></div>
+
+    <textarea id="vttContent" rows="10"></textarea>
+    <br />
+
+    <script>
+      var vttTimestamps = []; // Array to store timestamps and positions
+      // Ensure that the videoPlayer's 'timeupdate' event listener is set up correctly
+      document
+        .getElementById("videoPlayer")
+        .addEventListener("timeupdate", autoScrollTextArea);
+
+      function adjustTextAreaWidth() {
+        var videoPlayer = document.getElementById("videoPlayer");
+        var textArea = document.getElementById("vttContent");
+        textArea.style.width = videoPlayer.offsetWidth + "px";
+      }
+
+      function loadVideoFile(event) {
+        var file = event.target.files[0];
+        var url = URL.createObjectURL(file);
+        var videoPlayer = document.getElementById("videoPlayer");
+        videoPlayer.src = url;
+        videoPlayer.load();
+      }
+
+      function loadVTTFile(event) {
+        var file = event.target.files[0];
+        var reader = new FileReader();
+        reader.onload = function (e) {
+          var vttContent = e.target.result;
+          document.getElementById("vttContent").value = vttContent;
+          parseVTT(vttContent); // Parse and display subtitles
+
+          var videoPlayer = document.getElementById("videoPlayer");
+          // Remove existing track if it exists
+          var existingTrack = videoPlayer.querySelector("track");
+          if (existingTrack) {
+            videoPlayer.removeChild(existingTrack);
+          }
+
+          // Create and append new video track for subtitles
+          var videoTrack = document.createElement("track");
+          videoTrack.kind = "subtitles";
+          videoTrack.label = "English";
+          videoTrack.srclang = "en";
+          videoTrack.src = URL.createObjectURL(
+            new Blob([vttContent], { type: "text/vtt" })
+          );
+          videoTrack.default = true;
+          videoPlayer.appendChild(videoTrack);
+
+          videoPlayer.textTracks[0].mode = "showing";
+        };
+        reader.readAsText(file);
+      }
+
+      function updateSubtitles() {
+        updateTimestamps();
+
+        var videoPlayer = document.getElementById("videoPlayer");
+        var wasPlaying = !videoPlayer.paused;
+        var currentTime = videoPlayer.currentTime;
+        var currentSrc = videoPlayer.src; // Store current video source
+
+        var vttContent = document.getElementById("vttContent").value;
+
+        // Check if the content already starts with "WEBVTT"
+        if (!vttContent.trim().startsWith("WEBVTT")) {
+          // Prepend "WEBVTT" and a blank line to the content
+          vttContent = "WEBVTT\n\n" + vttContent;
+        }
+
+        // Now, vttContent has the "WEBVTT" header and a blank line at the start
+        document.getElementById("vttContent").value = vttContent;
+
+        var vttBlob = new Blob([vttContent], { type: "text/vtt" });
+        var vttUrl = URL.createObjectURL(vttBlob);
+
+        var track = videoPlayer.querySelector("track");
+        if (track) {
+          track.src = vttUrl;
+          videoPlayer.textTracks[0].mode = "disabled"; // Disable and re-enable track to force reload
+          videoPlayer.textTracks[0].mode = "showing";
+        }
+      }
+
+      function autoScrollTextArea() {
+        var videoPlayer = document.getElementById("videoPlayer");
+        var vttContainer = document.getElementById("vttContainer");
+        var currentTime = videoPlayer.currentTime;
+
+        var closestTimestampIndex =
+          vttTimestamps.findIndex(function (ts) {
+            return ts.time > currentTime;
+          }) - 1;
+
+        // Remove existing highlights
+        var highlighted =
+          vttContainer.getElementsByClassName("current-timestamp");
+        while (highlighted.length) {
+          highlighted[0].classList.remove("current-timestamp");
+        }
+
+        if (
+          closestTimestampIndex >= 0 &&
+          closestTimestampIndex < vttContainer.children.length
+        ) {
+          var closestDiv = vttContainer.children[closestTimestampIndex];
+          if (closestDiv) {
+            closestDiv.classList.add("current-timestamp");
+            closestDiv.scrollIntoView({ behavior: "smooth", block: "center" });
+          }
+          vttContainer.style.paddingTop = "0px";
+        }
+      }
+
+      function parseVTT(vttContent) {
+        var lines = vttContent.split("\n");
+        var vttContainer = document.getElementById("vttContainer");
+        vttContainer.innerHTML = "";
+        vttTimestamps = [];
+
+        var rowDiv = null;
+        var isHeaderProcessed = false;
+
+        lines.forEach(function (line, index) {
+          if (!isHeaderProcessed) {
+            if (line.trim().toUpperCase() === "WEBVTT") {
+              // Skip the WEBVTT header and the next blank line
+              isHeaderProcessed = true;
+              return;
+            } else {
+              // If the file does not start with WEBVTT, handle it as an invalid VTT file
+              console.error("Invalid VTT file format.");
+              return;
+            }
+          }
+
+          var match = line.match(
+            /(\d{2}:\d{2}:\d{2}\.\d{3}) --> (\d{2}:\d{2}:\d{2}\.\d{3})/
+          );
+
+          if (match) {
+            var startTime = match[1];
+            var endTime = match[2];
+            rowDiv = document.createElement("div");
+            var startInput = document.createElement("input");
+            var endInput = document.createElement("input");
+            var textArea = document.createElement("textarea");
+
+            startInput.value = startTime;
+            startInput.onchange = function () {
+              updateTimestamps();
+            };
+            endInput.value = endTime;
+            endInput.onchange = function () {
+              updateTimestamps();
+            };
+            textArea.rows = 1;
+
+            rowDiv.appendChild(startInput);
+            rowDiv.appendChild(endInput);
+            rowDiv.appendChild(textArea);
+            vttContainer.appendChild(rowDiv);
+
+            vttTimestamps.push({
+              time: hmsToSeconds(startTime),
+              divIndex: vttContainer.childElementCount - 1,
+            });
+          } else if (rowDiv && line.trim() !== "") {
+            rowDiv.children[2].value =
+              (rowDiv.children[2].value + line).trim() + "\n";
+          }
+        });
+      }
+
+      function updateTimestamps() {
+        var vttContainer = document.getElementById("vttContainer");
+        var rows = vttContainer.children;
+        var updatedVTTContent = "";
+
+        for (var i = 0; i < rows.length; i++) {
+          var startInput = rows[i].children[0];
+          var endInput = rows[i].children[1];
+          var textArea = rows[i].children[2];
+
+          updatedVTTContent +=
+            startInput.value + " --> " + endInput.value + "\n";
+          updatedVTTContent += textArea.value + "\n\n";
+        }
+
+        document.getElementById("vttContent").value = updatedVTTContent;
+      }
+
+      function hmsToSeconds(hms) {
+        var a = hms.split(":");
+        var seconds = +a[0] * 3600 + +a[1] * 60 + +parseFloat(a[2]);
+        return seconds;
+      }
+    </script>
+  </body>
+</html>

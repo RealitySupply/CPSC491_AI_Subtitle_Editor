@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>VTT and Video Uploader</title>
+    <style>
+      #vttContent {
+        width: calc(100% - 60px); /* Adjust width to account for line numbers */
+        box-sizing: border-box;
+        overflow-y: scroll;
+        float: left;
+      }
+
+      #lineNumbers {
+        width: 50px; /* Width of line numbers area */
+        overflow: hidden;
+        height: auto; /* Adjust height as per textarea */
+        line-height: normal; /* Adjust line height to match textarea */
+      }
+    </style>
+  </head>
+  <body>
+    <input
+      type="file"
+      id="videoInput"
+      accept="video/*"
+      onchange="loadVideoFile(event)"
+    />
+    <br /><br />
+    <input
+      type="file"
+      id="vttInput"
+      accept=".vtt"
+      onchange="loadVTTFile(event)"
+    />
+    <br /><br />
+    <video
+      id="videoPlayer"
+      controls
+      onloadedmetadata="adjustTextAreaWidth()"
+    ></video>
+    <br />
+    <textarea id="vttContent" rows="10"></textarea>
+    <br />
+    <button onclick="updateSubtitles()">Update Subtitles</button>
+
+    <div
+      id="lineNumbers"
+      style="float: left; text-align: right; margin-right: 10px"
+    ></div>
+    <textarea
+      id="vttContent"
+      rows="10"
+      oninput="updateLineNumbers()"
+    ></textarea>
+
+    <script>
+      var vttTimestamps = []; // Array to store timestamps and positions
+      // Ensure that the videoPlayer's 'timeupdate' event listener is set up correctly
+      document
+        .getElementById("videoPlayer")
+        .addEventListener("timeupdate", autoScrollTextArea);
+
+      document.addEventListener("DOMContentLoaded", function () {
+        updateLineNumbers();
+      });
+
+      function adjustTextAreaWidth() {
+        var videoPlayer = document.getElementById("videoPlayer");
+        var textArea = document.getElementById("vttContent");
+        textArea.style.width = videoPlayer.offsetWidth + "px";
+      }
+
+      function loadVideoFile(event) {
+        var file = event.target.files[0];
+        var url = URL.createObjectURL(file);
+        var videoPlayer = document.getElementById("videoPlayer");
+        videoPlayer.src = url;
+        videoPlayer.load();
+      }
+
+      function loadVTTFile(event) {
+        var file = event.target.files[0];
+        var reader = new FileReader();
+        reader.onload = function (e) {
+          var vttContent = e.target.result;
+          document.getElementById("vttContent").value = vttContent;
+
+          // Parse VTT file to fill the timestamps array
+          parseVTT(vttContent);
+
+          var videoPlayer = document.getElementById("videoPlayer");
+
+          // Remove existing track if it exists
+          var existingTrack = videoPlayer.querySelector("track");
+          if (existingTrack) {
+            videoPlayer.removeChild(existingTrack);
+          }
+
+          // Create and append new video track for subtitles
+          var videoTrack = document.createElement("track");
+          videoTrack.kind = "subtitles";
+          videoTrack.label = "English";
+          videoTrack.srclang = "en";
+          videoTrack.src = URL.createObjectURL(
+            new Blob([vttContent], { type: "text/vtt" })
+          );
+          videoTrack.default = true; // Set the track as default
+
+          videoPlayer.appendChild(videoTrack);
+
+          // Ensure captions are turned on
+          videoPlayer.textTracks[0].mode = "showing"; // Turn on captions
+        };
+        reader.readAsText(file);
+      }
+
+      //   function updateSubtitles() {
+      //     var videoPlayer = document.getElementById("videoPlayer");
+      //     var wasPlaying = !videoPlayer.paused;
+      //     var currentTime = videoPlayer.currentTime;
+
+      //     // Remove existing track
+      //     var existingTrack = videoPlayer.querySelector("track");
+      //     if (existingTrack) {
+      //       videoPlayer.removeChild(existingTrack);
+      //     }
+
+      //     var vttContent = document.getElementById("vttContent").value;
+      //     var track = document.createElement("track");
+      //     track.kind = "subtitles";
+      //     track.label = "English";
+      //     track.srclang = "en";
+      //     track.src = URL.createObjectURL(
+      //       new Blob([vttContent], { type: "text/vtt" })
+      //     );
+      //     videoPlayer.appendChild(track);
+
+      //     // Load the video to reflect track changes
+      //     videoPlayer.load();
+      //     videoPlayer.currentTime = currentTime;
+      //     if (wasPlaying) {
+      //       videoPlayer.play();
+      //     }
+
+      //     // Activate the new track
+      //     setTimeout(() => {
+      //       if (videoPlayer.textTracks[0]) {
+      //         videoPlayer.textTracks[0].mode = "showing";
+      //       }
+      //     }, 0);
+      //   }
+
+      function updateSubtitles() {
+        var videoPlayer = document.getElementById("videoPlayer");
+        var vttContent = document.getElementById("vttContent").value;
+        var vttBlob = new Blob([vttContent], { type: "text/vtt" });
+        var vttUrl = URL.createObjectURL(vttBlob);
+
+        var track = videoPlayer.querySelector("track");
+        if (track) {
+          track.src = vttUrl;
+          videoPlayer.textTracks[0].mode = "disabled"; // Disable and re-enable track to force reload
+          videoPlayer.textTracks[0].mode = "showing";
+        }
+      }
+
+      function autoScrollTextArea() {
+        var videoPlayer = document.getElementById("videoPlayer");
+        var textArea = document.getElementById("vttContent");
+        var currentTime = videoPlayer.currentTime;
+
+        // Find the closest timestamp before the current time
+        var closestTimestampIndex = vttTimestamps.findIndex(function (
+          ts,
+          index
+        ) {
+          return (
+            index === vttTimestamps.length - 1 ||
+            vttTimestamps[index + 1].time > currentTime
+          );
+        });
+
+        if (closestTimestampIndex !== -1) {
+          var closestTimestamp = vttTimestamps[closestTimestampIndex];
+          textArea.scrollTop = calculateScrollTopForLine(
+            textArea,
+            closestTimestamp.line
+          );
+        }
+      }
+
+      function updateLineNumbers() {
+        var textArea = document.getElementById("vttContent");
+        var lineNumbers = textArea.value.split("\n").length;
+        var lineNumbersDiv = document.getElementById("lineNumbers");
+        lineNumbersDiv.innerHTML = "";
+
+        for (var i = 1; i <= lineNumbers; i++) {
+          lineNumbersDiv.innerHTML += i + "<br>";
+        }
+      }
+
+      function calculateScrollTopForLine(textArea, lineNumber) {
+        var lineHeight = parseFloat(
+          window.getComputedStyle(textArea).lineHeight
+        );
+        if (isNaN(lineHeight)) {
+          // Fallback in case line height is normal or not set
+          lineHeight =
+            parseFloat(window.getComputedStyle(textArea).fontSize) * 1.2; // Example multiplier
+        }
+        return (lineNumber - 1) * lineHeight;
+      }
+
+      function parseVTT(vttContent) {
+        var lines = vttContent.split("\n");
+        var currentLine = 0;
+        lines.forEach(function (line, index) {
+          var match = line.match(
+            /(\d{2}:\d{2}:\d{2}\.\d{3}) --> (\d{2}:\d{2}:\d{2}\.\d{3})/
+          );
+          if (match) {
+            var startTime = match[1];
+            vttTimestamps.push({
+              time: hmsToSeconds(startTime),
+              line: currentLine,
+            });
+          }
+          currentLine++;
+        });
+      }
+
+      function hmsToSeconds(hms) {
+        var a = hms.split(":");
+        var seconds = +a[0] * 3600 + +a[1] * 60 + +parseFloat(a[2]);
+        return seconds;
+      }
+    </script>
+  </body>
+</html>

@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Local Video Player</title>
+  </head>
+  <body>
+    Add a video here:
+    <br />
+    <input type="file" id="video-url-example" />
+    <br />
+    ..and it will playback here, without any upload:
+    <br />
+    <div id="video-container" style="width: 50%"></div>
+
+    <script>
+      const input = document.querySelector("#video-url-example");
+
+      input.addEventListener("change", () => {
+        const file = input.files[0];
+        const url = URL.createObjectURL(file);
+
+        document.querySelector("#video-container").innerHTML = `
+          <video autoplay loop controls width="500" src="${url}">
+          <track src="/subtitle.vtt" label="English" kind="captions" srclang="en-us" default>
+          </track>
+          </video>
+        `;
+      });
+    </script>
+  </body>
+</html>
+

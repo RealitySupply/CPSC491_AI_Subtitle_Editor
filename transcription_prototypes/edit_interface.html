@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Video Player Interface</title>
+<link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+<style>
+  .video-container {
+    max-width: 640px;
+    margin: auto;
+  }
+  .controls-container {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 1rem;
+  }
+  .text-box {
+    margin-top: 1rem;
+  }
+</style>
+</head>
+<body class="bg-gray-100">
+
+<div class="video-container mt-8 p-4 bg-white shadow-lg rounded-lg">
+  <div class="mb-4">
+    <button class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">Download</button>
+  </div>
+  <div class="video-player bg-black h-64"></div>
+  <div class="controls-container">
+    <button class="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-4 rounded">Set Timing Start</button>
+    <button class="bg-red-500 hover:bg-red-700 text-white font-bold py-2 px-4 rounded">Set Timing End</button>
+    <button class="bg-yellow-500 hover:bg-yellow-700 text-white font-bold py-2 px-4 rounded">Show Confidence</button>
+  </div>
+  <div class="text-box">
+    <textarea class="form-textarea mt-1 block w-full" rows="3" placeholder="Editable text box"></textarea>
+  </div>
+  <div class="mb-4">
+    <button class="bg-purple-500 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded">Play from Cursor</button>
+  </div>
+</div>
+
+<script>
+  // Placeholder for video player initialization and control logic
+</script>
+
+</body>
+</html>
