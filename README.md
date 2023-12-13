@@ -26,6 +26,9 @@ cd ai_subtitle
 ```
 3. Install dependencies:
 ```
+npm run download
+```
+```
 npm install
 ```
 4. whisper.cpp setup. Installation instructions avaiable on their [repo](https://github.com/ggerganov/whisper.cpp).
