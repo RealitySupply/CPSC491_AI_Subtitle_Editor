@@ -1,0 +1,970 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VTT Subtitle/Captions Editor</title>
+    <link rel="stylesheet" type="text/css" href="style.css" />
+    <script src="/assets/ffmpeg/package/dist/umd/ffmpeg.js"></script>
+    <script src="/assets/util/package/dist/umd/index.js"></script>
+  </head>
+  <body>
+    <div id="videoFileSection">
+      <h1>Select Video File</h1>
+      <input
+        type="file"
+        id="uploader"
+        accept="video/*"
+        onchange="loadVideoFile(event)"
+      />
+      <p id="message"></p>
+      <br /><br />
+    </div>
+
+    <!-- <div id="subtitleFileSection">
+      <h1>Select Subtitle File</h1>
+      <input
+        type="file"
+        id="vttInput"
+        accept=".vtt"
+        onchange="loadVTTFile(event)"
+      />
+      <br /><br />
+    </div> -->
+
+    <div id="video_container">
+      <video
+        id="videoPlayer"
+        width="960"
+        display="block"
+        muted
+        onloadedmetadata="adjustTextAreaWidth()"
+      ></video>
+    </div>
+
+    <div id="demo-controls">
+      <div id="controls">
+        <div>
+          <button data-action="zoom-in">Zoom in</button>
+          <button data-action="zoom-out">Zoom out</button>
+          <input type="checkbox" id="auto-scroll" checked />
+          <label for="auto-scroll">Auto-scroll</label>
+          <button data-action="add-segment">Add Segment</button>
+          <!-- <button data-action="log-data">Log segments/points</button>
+          <button onclick="updateSubtitles()">Update Subtitles</button> -->
+        </div>
+      </div>
+    </div>
+
+    <div class="waveform-container">
+      <div id="zoomview-container"></div>
+    </div>
+    <div class="waveform-container">
+      <div id="overview-container"></div>
+    </div>
+
+    <div id="audio_container">
+      <audio id="audio" controls="controls">
+        <!-- <source src="/temp_audio.wav" type="audio/wav" /> -->
+        Your browser does not support the audio element.
+      </audio>
+    </div>
+
+    <div id="vttContainer"></div>
+
+    <textarea id="vttContent" rows="10"></textarea>
+
+    <div class="log">
+      <div id="segments" class="hide">
+        <h2>Segments</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Label</th>
+              <th>Start time</th>
+              <th>End time</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <script src="peaks.js"></script>
+    <script>
+      var peaksInstance;
+      var audioElement = document.getElementById("audio");
+
+      // Using FFmpeg.wasm on uploaded video to strip audio and transcode it to wav format
+      const { fetchFile } = FFmpegUtil;
+      const { FFmpeg } = FFmpegWASM;
+      let ffmpeg = null;
+
+      const split_audio = async ({ target: { files } }) => {
+        const message = document.getElementById("message");
+        if (ffmpeg === null) {
+          ffmpeg = new FFmpeg();
+          ffmpeg.on("log", ({ message }) => {
+            console.log(message);
+          });
+          ffmpeg.on("progress", ({ progress, time }) => {
+            message.innerHTML = `${progress * 100} %, time: ${
+              time / 1000000
+            } s`;
+          });
+          await ffmpeg.load({
+            coreURL: "/assets/core-mt/package/dist/umd/ffmpeg-core.js",
+          });
+        }
+        const { name } = files[0];
+        await ffmpeg.writeFile(name, await fetchFile(files[0]));
+        message.innerHTML = "Start splitting audio";
+        console.time("exec");
+        // ffmpeg -i {inputFileName} -c:a pcm_s16le -ac 1 -ar 16000 -vn -y {outputFileName}.wav
+        await ffmpeg.exec([
+          "-i",
+          name,
+          "-c:a",
+          "pcm_s16le",
+          "-ac",
+          "1",
+          "-ar",
+          "16000",
+          "-vn",
+          "-y",
+          "output.wav",
+        ]);
+        console.timeEnd("exec");
+        message.innerHTML = "Complete audio";
+
+        const wavData = await ffmpeg.readFile("output.wav");
+        const wavFile = new File([wavData.buffer], "output.wav", {
+          type: "audio/wav",
+        });
+
+        audioElement.src = URL.createObjectURL(
+          new Blob([wavData.buffer], { type: "audio/wav" })
+        );
+
+        // Prepare the form data
+        const formData = new FormData();
+        formData.append("audioFile", wavFile);
+
+        // Use fetch to send the file to the server
+        fetch("/upload", {
+          method: "POST",
+          body: formData,
+        })
+          .then((response) => {
+            if (response.ok) {
+              return response.json();
+            }
+            throw new Error("Network response was not ok.");
+          })
+          .then((data) => {
+            console.log("Transcription successful:", data);
+            processJsonTranscript(data); // Pass the JSON data
+          })
+          .catch((error) => {
+            console.error("Error during fetch:", error);
+          });
+      };
+
+      const elm = document.getElementById("uploader");
+      elm.addEventListener("change", split_audio);
+
+      audioElement.addEventListener("loadeddata", function () {
+        console.log("Audio file loaded!");
+
+        (function (Peaks) {
+          var renderSegments = function (peaks) {
+            var segmentsContainer = document.getElementById("segments");
+            var segments = peaks.segments.getSegments();
+            var html = "";
+
+            for (var i = 0; i < segments.length; i++) {
+              var segment = segments[i];
+
+              var row =
+                "<tr>" +
+                "<td>" +
+                segment.id +
+                "</td>" +
+                '<td><input data-action="update-segment-label" type="text" value="' +
+                segment.labelText +
+                '" data-id="' +
+                segment.id +
+                '"/></td>' +
+                '<td><input data-action="update-segment-start-time" type="number" value="' +
+                segment.startTime +
+                '" data-id="' +
+                segment.id +
+                '"/></td>' +
+                '<td><input data-action="update-segment-end-time" type="number" value="' +
+                segment.endTime +
+                '" data-id="' +
+                segment.id +
+                '"/></td>' +
+                "<td>" +
+                '<a href="#' +
+                segment.id +
+                '" data-action="play-segment" data-id="' +
+                segment.id +
+                '">Play</a>' +
+                "</td>" +
+                "<td>" +
+                '<a href="#' +
+                segment.id +
+                '" data-action="loop-segment" data-id="' +
+                segment.id +
+                '">Loop</a>' +
+                "</td>" +
+                "<td>" +
+                '<a href="#' +
+                segment.id +
+                '" data-action="remove-segment" data-id="' +
+                segment.id +
+                '">Remove</a>' +
+                "</td>" +
+                "</tr>";
+
+              html += row;
+            }
+
+            segmentsContainer.querySelector("tbody").innerHTML = html;
+
+            if (html.length) {
+              segmentsContainer.classList.remove("hide");
+            }
+
+            document
+              .querySelectorAll(
+                'input[data-action="update-segment-start-time"]'
+              )
+              .forEach(function (inputElement) {
+                inputElement.addEventListener("input", function (event) {
+                  var element = event.target;
+                  var id = element.getAttribute("data-id");
+                  var segment = peaks.segments.getSegment(id);
+
+                  if (segment) {
+                    var startTime = parseFloat(element.value);
+
+                    if (startTime < 0) {
+                      startTime = 0;
+                      element.value = 0;
+                    }
+
+                    if (startTime >= segment.endTime) {
+                      startTime = segment.endTime - 0.1;
+                      element.value = startTime;
+                    }
+
+                    segment.update({ startTime: startTime });
+                  }
+                });
+              });
+
+            document
+              .querySelectorAll('input[data-action="update-segment-end-time"]')
+              .forEach(function (inputElement) {
+                inputElement.addEventListener("input", function (event) {
+                  var element = event.target;
+                  var id = element.getAttribute("data-id");
+                  var segment = peaks.segments.getSegment(id);
+
+                  if (segment) {
+                    var endTime = parseFloat(element.value);
+
+                    if (endTime < 0) {
+                      endTime = 0;
+                      element.value = 0;
+                    }
+
+                    if (endTime <= segment.startTime) {
+                      endTime = segment.startTime + 0.1;
+                      element.value = endTime;
+                    }
+
+                    segment.update({ endTime: endTime });
+                  }
+                });
+              });
+
+            document
+              .querySelectorAll('input[data-action="update-segment-label"]')
+              .forEach(function (inputElement) {
+                inputElement.addEventListener("input", function (event) {
+                  var element = event.target;
+                  var id = element.getAttribute("data-id");
+                  var segment = peaks.segments.getSegment(id);
+                  var labelText = element.labelText;
+
+                  if (segment) {
+                    segment.update({ labelText: labelText });
+                  }
+                });
+              });
+          };
+
+          var renderPoints = function (peaks) {
+            var pointsContainer = document.getElementById("points");
+            var points = peaks.points.getPoints();
+            var html = "";
+
+            for (var i = 0; i < points.length; i++) {
+              var point = points[i];
+
+              var row =
+                "<tr>" +
+                "<td>" +
+                point.id +
+                "</td>" +
+                '<td><input data-action="update-point-label" type="text" value="' +
+                point.labelText +
+                '" data-id="' +
+                point.id +
+                '"/></td>' +
+                '<td><input data-action="update-point-time" type="number" value="' +
+                point.time +
+                '" data-id="' +
+                point.id +
+                '"/></td>' +
+                "<td>" +
+                '<a href="#' +
+                point.id +
+                '" data-action="remove-point" data-id="' +
+                point.id +
+                '">Remove</a>' +
+                "</td>" +
+                "</tr>";
+
+              html += row;
+            }
+
+            pointsContainer.querySelector("tbody").innerHTML = html;
+
+            if (html.length) {
+              pointsContainer.classList.remove("hide");
+            }
+
+            document
+              .querySelectorAll('input[data-action="update-point-time"]')
+              .forEach(function (inputElement) {
+                inputElement.addEventListener("input", function (event) {
+                  var element = event.target;
+                  var id = element.getAttribute("data-id");
+                  var point = peaks.points.getPoint(id);
+
+                  if (point) {
+                    var time = parseFloat(element.value);
+
+                    if (time < 0) {
+                      time = 0;
+                      element.value = 0;
+                    }
+
+                    point.update({ time: time });
+                  }
+                });
+              });
+
+            document
+              .querySelectorAll('input[data-action="update-point-label"]')
+              .forEach(function (inputElement) {
+                inputElement.addEventListener("input", function (event) {
+                  var element = event.target;
+                  var id = element.getAttribute("data-id");
+                  var point = peaks.points.getPoint(id);
+                  var labelText = element.labelText;
+
+                  if (point) {
+                    point.update({ labelText: labelText });
+                  }
+                });
+              });
+          };
+
+          var AudioContext = window.AudioContext || window.webkitAudioContext;
+          var audioContext = new AudioContext();
+
+          var options = {
+            zoomview: {
+              container: document.getElementById("zoomview-container"),
+            },
+            overview: {
+              container: document.getElementById("overview-container"),
+            },
+            mediaElement: audioElement,
+            webAudio: {
+              audioContext: audioContext,
+              scale: 128,
+              multiChannel: false,
+            },
+            keyboard: true,
+            pointMarkerColor: "#006eb0",
+            showPlayheadTime: true,
+            emitCueEvents: true,
+            waveformCache: true,
+            zoomLevels: [128, 256, 512, 1024, 2048, 4096],
+            highlightColor: "#0066FF",
+            segmentOptions: {
+              markers: false,
+              overlay: true,
+              waveformColor: "#ff851b",
+              overlayColor: "#bcbcbc",
+              overlayOpacity: 0.5,
+              overlayBorderColor: "#000000",
+              overlayBorderWidth: 0.7,
+              overlayCornerRadius: 5,
+              overlayOffset: 10,
+              overlayLabelAlign: "left",
+              overlayLabelVerticalAlign: "top",
+              overlayLabelPadding: 8,
+              overlayLabelColor: "#ffffff",
+              overlayFontFamily: "sans-serif",
+              overlayFontSize: 14,
+              overlayFontStyle: "normal",
+            },
+            createSegmentLabel: function () {
+              return null;
+            },
+          };
+
+          Peaks.init(options, function (err, peaksInstanceParameter) {
+            if (err) {
+              console.error(err.message);
+              return;
+            }
+
+            console.log("Peaks instance ready");
+
+            peaksInstance = peaksInstanceParameter;
+
+            peaksInstance.views.getView("zoomview").setMinSegmentDragWidth(50);
+
+            document
+              .querySelector('[data-action="zoom-in"]')
+              .addEventListener("click", function () {
+                peaksInstance.zoom.zoomIn();
+              });
+
+            document
+              .querySelector('[data-action="zoom-out"]')
+              .addEventListener("click", function () {
+                peaksInstance.zoom.zoomOut();
+              });
+
+            document
+              .querySelector('button[data-action="add-segment"]')
+              .addEventListener("click", function () {
+                peaksInstance.segments.add({
+                  startTime: peaksInstance.player.getCurrentTime(),
+                  endTime: peaksInstance.player.getCurrentTime() + 1,
+                  labelText: "",
+                  editable: true,
+                });
+              });
+
+            // document
+            //   .querySelector('button[data-action="log-data"]')
+            //   .addEventListener("click", function (event) {
+            //     renderSegments(peaksInstance);
+            //     renderPoints(peaksInstance);
+            //   });
+
+            document
+              .getElementById("auto-scroll")
+              .addEventListener("change", function (event) {
+                var view = peaksInstance.views.getView("zoomview");
+                view.enableAutoScroll(event.target.checked);
+              });
+
+            document
+              .querySelector("body")
+              .addEventListener("click", function (event) {
+                var element = event.target;
+                var action = element.getAttribute("data-action");
+                var id = element.getAttribute("data-id");
+
+                if (action === "play-segment") {
+                  var segment = peaksInstance.segments.getSegment(id);
+                  peaksInstance.player.playSegment(segment);
+                } else if (action === "loop-segment") {
+                  var segment = peaksInstance.segments.getSegment(id);
+                  peaksInstance.player.playSegment(segment, true);
+                } else if (action === "remove-point") {
+                  peaksInstance.points.removeById(id);
+                } else if (action === "remove-segment") {
+                  peaksInstance.segments.removeById(id);
+                }
+              });
+
+            // Point events
+
+            peaksInstance.on("points.add", function (event) {
+              console.log("points.add:", event);
+            });
+
+            peaksInstance.on("points.mouseenter", function (event) {
+              console.log("points.mouseenter:", event);
+            });
+
+            peaksInstance.on("points.mouseleave", function (event) {
+              console.log("points.mouseleave:", event);
+            });
+
+            peaksInstance.on("points.click", function (event) {
+              console.log("points.click:", event);
+            });
+
+            peaksInstance.on("points.dblclick", function (event) {
+              console.log("points.dblclick:", event);
+            });
+
+            peaksInstance.on("points.contextmenu", function (event) {
+              event.evt.preventDefault();
+
+              console.log("points.contextmenu:", event);
+            });
+
+            peaksInstance.on("points.dragstart", function (event) {
+              console.log("points.dragstart:", event);
+            });
+
+            peaksInstance.on("points.dragmove", function (event) {
+              console.log("points.dragmove:", event);
+            });
+
+            peaksInstance.on("points.dragend", function (event) {
+              console.log("points.dragend:", event);
+            });
+
+            // Segment events
+
+            peaksInstance.on("segments.add", function (event) {
+              console.log("segments.add:", event);
+            });
+
+            peaksInstance.on("segments.insert", function (event) {
+              console.log("segments.insert:", event);
+            });
+
+            peaksInstance.on("segments.dragstart", function (event) {
+              console.log("segments.dragstart:", event);
+            });
+
+            peaksInstance.on("segments.dragend", function (event) {
+              console.log("segments.dragend:", event);
+            });
+
+            peaksInstance.on("segments.dragged", function (event) {
+              console.log("segments.dragged:", event);
+            });
+
+            peaksInstance.on("segments.mouseenter", function (event) {
+              console.log("segments.mouseenter:", event);
+            });
+
+            peaksInstance.on("segments.mouseleave", function (event) {
+              console.log("segments.mouseleave:", event);
+            });
+
+            peaksInstance.on("segments.mousedown", function (event) {
+              console.log("segments.mousedown:", event);
+            });
+
+            peaksInstance.on("segments.mouseup", function (event) {
+              console.log("segments.mouseup:", event);
+            });
+
+            peaksInstance.on("segments.click", function (event) {
+              console.log("segments.click:", event);
+            });
+
+            peaksInstance.on("segments.dblclick", function (event) {
+              console.log("segments.dblclick:", event);
+            });
+
+            peaksInstance.on("segments.contextmenu", function (event) {
+              event.evt.preventDefault();
+
+              console.log("segments.contextmenu:", event);
+            });
+
+            // Zoomview waveform events
+
+            peaksInstance.on("zoomview.click", function (event) {
+              console.log("zoomview.click:", event);
+            });
+
+            peaksInstance.on("zoomview.dblclick", function (event) {
+              console.log("zoomview.dblclick:", event);
+            });
+
+            peaksInstance.on("zoomview.contextmenu", function (event) {
+              event.evt.preventDefault();
+
+              console.log("zoomview.contextmenu:", event);
+            });
+
+            // Overview waveform events
+
+            peaksInstance.on("overview.click", function (event) {
+              console.log("overview.click:", event);
+            });
+
+            peaksInstance.on("overview.dblclick", function (event) {
+              console.log("overview.dblclick:", event);
+            });
+
+            peaksInstance.on("overview.contextmenu", function (event) {
+              event.evt.preventDefault();
+
+              console.log("overview.contextmenu:", event);
+            });
+
+            // Player events
+
+            var myvideo = document.getElementById("videoPlayer");
+
+            // Event listener for playhead movement
+            peaksInstance.on("player.timeupdate", updateSegmentColor);
+
+            peaksInstance.on("player.seeked", function (time) {
+              myvideo.currentTime = time;
+              myvideo.onseeked = function () {
+                if (!myvideo.paused) {
+                  myvideo.play();
+                }
+              };
+              console.log("player.seeked:", time);
+            });
+
+            peaksInstance.on("player.playing", function (time) {
+              myvideo.currentTime = time;
+              myvideo.onseeked = function () {
+                myvideo.play();
+              };
+              console.log("player.playing:", time);
+            });
+
+            peaksInstance.on("player.pause", function (time) {
+              myvideo.pause();
+              console.log("player.pause:", time);
+            });
+
+            peaksInstance.on("player.ended", function () {
+              console.log("player.ended");
+            });
+          });
+        })(peaks);
+      });
+
+      audioElement.addEventListener("error", function () {
+        console.log("Error loading the audio file.");
+      });
+
+      // Function to update segment color
+      function updateSegmentColor() {
+        const currentTime = peaksInstance.player.getCurrentTime();
+
+        var segments = peaksInstance.segments.getSegments();
+
+        for (var i = 0; i < segments.length; i++) {
+          var segment = segments[i];
+          if (
+            currentTime >= segment.startTime &&
+            currentTime <= segment.endTime
+          ) {
+            // Change color when playhead is within the segment
+            segment.update({ color: "#0066FF" });
+          } else {
+            // Revert to original color when playhead leaves the segment
+            segment.update({ color: "#bcbcbc" });
+          }
+        }
+      }
+
+      var vttTimestamps = []; // Array to store timestamps and positions
+
+      document
+        .getElementById("videoPlayer")
+        .addEventListener("timeupdate", autoScrollTextArea);
+
+      function loadVideoFile(event) {
+        var file = event.target.files[0];
+        if (file) {
+          var url = URL.createObjectURL(file);
+          var videoPlayer = document.getElementById("videoPlayer");
+          videoPlayer.src = url;
+          videoPlayer.load();
+
+          // Hide the video file section
+          document.getElementById("videoFileSection").style.display = "none";
+        }
+      }
+      function processJsonTranscript(jsonData) {
+        if (!peaksInstance) {
+          console.error("Peaks instance is not initialized");
+          return;
+        }
+
+        let segmentCounter = 1;
+        let newVttContent = "WEBVTT\n\n";
+
+        jsonData.transcription.forEach((entry) => {
+          const startTime = entry.offsets.from / 1000;
+          const endTime = entry.offsets.to / 1000;
+          const text = entry.text;
+
+          // Add segment to peaksInstance
+          peaksInstance.segments.add({
+            startTime: startTime,
+            endTime: endTime,
+            labelText: segmentCounter.toString(),
+            editable: true,
+          });
+
+          // Append to new VTT content
+          newVttContent +=
+            formatTime(startTime) + " --> " + formatTime(endTime) + "\n";
+          newVttContent += text + "\n\n";
+
+          segmentCounter++;
+        });
+
+        // Update the VTT content textarea
+        document.getElementById("vttContent").value = newVttContent;
+        parseVTT(newVttContent); // Parse and display subtitles
+        updateSubtitles(); // Update video player with new subtitles
+      }
+
+      function formatTime(seconds) {
+        // Extract hours, minutes, seconds, and milliseconds
+        const hours = Math.floor(seconds / 3600);
+        seconds %= 3600;
+        const minutes = Math.floor(seconds / 60);
+        const secs = Math.floor(seconds % 60);
+        const millis = Math.floor((seconds % 1) * 1000);
+
+        // Format each component to ensure two digits for hours, minutes, and seconds,
+        // and three digits for milliseconds
+        const formattedHours = hours.toString().padStart(2, "0");
+        const formattedMinutes = minutes.toString().padStart(2, "0");
+        const formattedSeconds = secs.toString().padStart(2, "0");
+        const formattedMillis = millis.toString().padStart(3, "0");
+
+        return `${formattedHours}:${formattedMinutes}:${formattedSeconds}.${formattedMillis}`;
+      }
+
+      function convertMillisecondsToVTT(milliseconds) {
+        const date = new Date(milliseconds);
+        const hh = date.getUTCHours().toString().padStart(2, "0");
+        const mm = date.getUTCMinutes().toString().padStart(2, "0");
+        const ss = date.getUTCSeconds().toString().padStart(2, "0");
+        const ms = date.getUTCMilliseconds().toString().padStart(3, "0");
+        return `${hh}:${mm}:${ss}.${ms}`;
+      }
+
+      function loadVTTFile(event) {
+        var file = event.target.files[0];
+        if (file) {
+          var reader = new FileReader();
+          reader.onload = function (e) {
+            var vttContent = e.target.result;
+            document.getElementById("vttContent").value = vttContent;
+            parseVTT(vttContent); // Parse and display subtitles
+
+            var videoPlayer = document.getElementById("videoPlayer");
+            // Remove existing track if it exists
+            var existingTrack = videoPlayer.querySelector("track");
+            if (existingTrack) {
+              videoPlayer.removeChild(existingTrack);
+            }
+
+            // Create and append new video track for subtitles
+            var videoTrack = document.createElement("track");
+            videoTrack.kind = "subtitles";
+            videoTrack.label = "English";
+            videoTrack.srclang = "en";
+            videoTrack.src = URL.createObjectURL(
+              new Blob([vttContent], { type: "text/vtt" })
+            );
+            videoTrack.default = true;
+            videoPlayer.appendChild(videoTrack);
+
+            videoPlayer.textTracks[0].mode = "showing";
+
+            // Hide the subtitle file section
+            document.getElementById("subtitleFileSection").style.display =
+              "none";
+          };
+          reader.readAsText(file);
+        }
+      }
+
+      function updateSubtitles() {
+        updateTimestamps();
+
+        var videoPlayer = document.getElementById("videoPlayer");
+        var wasPlaying = !videoPlayer.paused;
+        var currentTime = videoPlayer.currentTime;
+        var currentSrc = videoPlayer.src; // Store current video source
+
+        var vttContent = document.getElementById("vttContent").value;
+
+        // Check if the content already starts with "WEBVTT"
+        if (!vttContent.trim().startsWith("WEBVTT")) {
+          // Prepend "WEBVTT" and a blank line to the content
+          vttContent = "WEBVTT\n\n" + vttContent;
+        }
+
+        // Now, vttContent has the "WEBVTT" header and a blank line at the start
+        document.getElementById("vttContent").value = vttContent;
+
+        var vttBlob = new Blob([vttContent], { type: "text/vtt" });
+        var vttUrl = URL.createObjectURL(vttBlob);
+
+        var track = videoPlayer.querySelector("track");
+        if (track) {
+          track.src = vttUrl;
+          videoPlayer.textTracks[0].mode = "disabled"; // Disable and re-enable track to force reload
+          videoPlayer.textTracks[0].mode = "showing";
+        }
+      }
+
+      function autoScrollTextArea() {
+        var videoPlayer = document.getElementById("videoPlayer");
+        var vttContainer = document.getElementById("vttContainer");
+        var currentTime = videoPlayer.currentTime;
+
+        var closestTimestampIndex =
+          vttTimestamps.findIndex(function (ts) {
+            return ts.time > currentTime;
+          }) - 1;
+
+        // Remove existing highlights
+        var highlighted =
+          vttContainer.getElementsByClassName("current-timestamp");
+        while (highlighted.length) {
+          highlighted[0].classList.remove("current-timestamp");
+        }
+
+        if (
+          closestTimestampIndex >= 0 &&
+          closestTimestampIndex < vttContainer.children.length
+        ) {
+          var closestDiv = vttContainer.children[closestTimestampIndex];
+          if (closestDiv) {
+            closestDiv.classList.add("current-timestamp");
+            closestDiv.scrollIntoView({
+              behavior: "smooth",
+              block: "center",
+            });
+          }
+          vttContainer.style.paddingTop = "0px";
+        }
+      }
+
+      function parseVTT(vttContent) {
+        var lines = vttContent.split("\n");
+        var vttContainer = document.getElementById("vttContainer");
+        vttContainer.innerHTML = "";
+        vttTimestamps = [];
+
+        var rowDiv = null;
+        var isHeaderProcessed = false;
+
+        lines.forEach(function (line, index) {
+          if (!isHeaderProcessed) {
+            if (line.trim().toUpperCase() === "WEBVTT") {
+              // Skip the WEBVTT header and the next blank line
+              isHeaderProcessed = true;
+              return;
+            } else {
+              // If the file does not start with WEBVTT, handle it as an invalid VTT file
+              console.error("Invalid VTT file format.");
+              return;
+            }
+          }
+
+          var match = line.match(
+            /(\d{2}:\d{2}:\d{2}\.\d{3}) --> (\d{2}:\d{2}:\d{2}\.\d{3})/
+          );
+
+          if (match) {
+            var startTime = match[1];
+            var endTime = match[2];
+            rowDiv = document.createElement("div");
+            var startInput = document.createElement("input");
+            var endInput = document.createElement("input");
+            var textArea = document.createElement("textarea");
+
+            startInput.value = startTime;
+            startInput.onchange = function () {
+              updateTimestamps();
+            };
+            endInput.value = endTime;
+            endInput.onchange = function () {
+              updateTimestamps();
+            };
+            textArea.rows = 1;
+
+            rowDiv.appendChild(startInput);
+            rowDiv.appendChild(endInput);
+            rowDiv.appendChild(textArea);
+            vttContainer.appendChild(rowDiv);
+
+            vttTimestamps.push({
+              time: hmsToSeconds(startTime),
+              divIndex: vttContainer.childElementCount - 1,
+            });
+          } else if (rowDiv && line.trim() !== "") {
+            rowDiv.children[2].value =
+              (rowDiv.children[2].value + line).trim() + "\n";
+          }
+        });
+        monitorTextAreas();
+      }
+
+      function updateTimestamps() {
+        var vttContainer = document.getElementById("vttContainer");
+        var rows = vttContainer.children;
+        var updatedVTTContent = "";
+
+        for (var i = 0; i < rows.length; i++) {
+          var startInput = rows[i].children[0];
+          var endInput = rows[i].children[1];
+          var textArea = rows[i].children[2];
+
+          updatedVTTContent +=
+            startInput.value + " --> " + endInput.value + "\n";
+          updatedVTTContent += textArea.value + "\n\n";
+        }
+
+        document.getElementById("vttContent").value = updatedVTTContent;
+      }
+
+      function hmsToSeconds(hms) {
+        var a = hms.split(":");
+        var seconds = +a[0] * 3600 + +a[1] * 60 + +parseFloat(a[2]);
+        return seconds;
+      }
+
+      // This function could be called after the text areas are created or when the DOM is fully loaded
+      function monitorTextAreas() {
+        var textAreas = document.querySelectorAll("#vttContainer textarea");
+
+        textAreas.forEach(function (textArea) {
+          textArea.addEventListener("input", function (event) {
+            // This function is called every time the user makes a change in a text area
+            updateSubtitles();
+          });
+        });
+      }
+    </script>
+  </body>
+</html>

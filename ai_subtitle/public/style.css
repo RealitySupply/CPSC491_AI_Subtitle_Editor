@@ -1,0 +1,181 @@
+body {
+  font-family: 'Helvetica neue', Helvetica, Arial, sans-serif;
+}
+
+#titles {
+  margin: 24px auto;
+  width: 1000px;
+}
+
+.waveform-container {
+  margin: -1px auto;
+  width: 960px;
+  line-height: 0;
+  border-style: solid;
+  border-width: 1px;
+  border: 1px solid #919191;
+  overflow: clip;
+}
+
+#zoomview-container {
+  height: 50px;
+  margin: 0;
+  line-height: 0;
+}
+
+#overview-container {
+  height: 50px;
+}
+
+#scrollbar-container {
+  height: 16px;
+  background-color: #ccc;
+}
+
+#demo-controls {
+  margin: 0 auto 5px auto;
+  width: 1000px;
+  display: flex;
+  align-items: top;
+}
+
+#demo-controls button {
+  background: #fff;
+  border: 1px solid #919191;
+  cursor: pointer;
+}
+
+#audio {
+  flex-grow: 0;
+  flex-shrink: 0;
+  flex-basis: 30%;
+}
+
+#controls {
+  flex: 1;
+  margin-left: 1em;
+}
+
+#controls div {
+  margin-top: 2px;
+  margin-bottom: 2px;
+}
+
+#seek-time {
+  width: 4em;
+}
+
+.log {
+  margin: 0 auto 0px auto;
+  width: 960px;
+}
+
+table {
+  width: 100%;
+}
+
+table th {
+  text-align: left;
+}
+
+table th, table td {
+  padding: 0.5em;
+}
+
+.hide {
+  display: none;
+}
+
+p code {
+  margin-left: 4em
+}
+
+.current-timestamp {
+  background-color: rgb(185, 213, 255);
+  color: black;
+}
+
+#vttContent {
+  width: 100%;
+  box-sizing: border-box;
+  overflow-y: scroll; /* Enable vertical scrolling */
+  display: none; /* This hides the textarea */
+}
+
+#vttContainer {
+  height: 158px;
+  overflow-y: auto;
+  width: 960px;
+  margin: 0 auto;
+}
+
+#vttContainer div {
+  display: flex;
+  margin-bottom: 5px;
+}
+
+#vttContainer input {
+  width: 100px; /* Width of the input fields */
+  margin-right: 5px;
+}
+
+#vttContainer textarea {
+  flex-grow: 1;
+  height: 38px; /* Height of each text area */
+  overflow: hidden;
+  resize: none;
+  width: calc(960px - 100px - 5px); /* Adjusted to fit the video width */
+}
+
+#video_container video {
+  display: block;
+  margin: 0 auto;
+  width: 960px;
+  border-radius: 10px; 
+  overflow: hidden; 
+}
+
+#audio_container {
+  text-align: center;
+  width: 100%;
+  margin: 5px auto;
+}
+
+#audio_container audio {
+  display: block;
+  margin: 0 auto;
+  width: 960px;
+}
+
+#loadingIndicator {
+  display: none; 
+  position: fixed;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 24px;
+  color: #333;
+  background-color: #fff;
+  padding: 20px;
+  border-radius: 10px;
+  box-shadow: 0px 0px 10px rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+}
+
+#loadingIndicator.active {
+  display: block; /* Show when active */
+}
+
+.segment-row {
+  display: flex;
+  align-items: center;
+}
+
+.button-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+textarea {
+  flex-grow: 1; /* Allow text area to take remaining space */
+}

@@ -1,0 +1,1015 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VTT Subtitle/Captions Editor</title>
+    <link rel="stylesheet" type="text/css" href="style.css" />
+    <script src="/assets/ffmpeg/package/dist/umd/ffmpeg.js"></script>
+    <script src="/assets/util/package/dist/umd/index.js"></script>
+  </head>
+  <body>
+    <div id="videoFileSection">
+      <h1>Select Video File</h1>
+      <input
+        type="file"
+        id="uploader"
+        accept="video/*"
+        onchange="loadVideoFile(event)"
+      />
+      <p id="message"></p>
+      <br /><br />
+    </div>
+
+    <!-- <div id="subtitleFileSection">
+      <h1>Select Subtitle File</h1>
+      <input
+        type="file"
+        id="vttInput"
+        accept=".vtt"
+        onchange="loadVTTFile(event)"
+      />
+      <br /><br />
+    </div> -->
+
+    <div id="video_container">
+      <video
+        id="videoPlayer"
+        width="960"
+        display="block"
+        muted
+        onloadedmetadata="adjustTextAreaWidth()"
+      ></video>
+    </div>
+
+    <div id="demo-controls">
+      <div id="controls">
+        <div>
+          <button data-action="zoom-in">Zoom in</button>
+          <button data-action="zoom-out">Zoom out</button>
+          <input type="checkbox" id="auto-scroll" checked />
+          <label for="auto-scroll">Auto-scroll</label>
+          <button data-action="add-segment">Add Segment</button>
+          <button data-action="undo">Undo</button>
+          <button data-action="redo">Redo</button>
+          <button data-action="download-vtt">Download VTT</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="waveform-container">
+      <div id="zoomview-container"></div>
+    </div>
+    <div class="waveform-container">
+      <div id="overview-container"></div>
+    </div>
+
+    <div id="audio_container">
+      <audio id="audio" controls="controls">
+        <!-- <source src="/temp_audio.wav" type="audio/wav" /> -->
+        Your browser does not support the audio element.
+      </audio>
+    </div>
+
+    <div id="loadingIndicator">Transcription in progress</div>
+
+    <div id="vttContainer"></div>
+
+    <textarea id="vttContent" rows="10"></textarea>
+
+    <div class="log">
+      <div id="segments" class="hide">
+        <h2>Segments</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Label</th>
+              <th>Start time</th>
+              <th>End time</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <script src="peaks.js"></script>
+    <script>
+      // const segment1 = new Segment(0, 10, "Introductory speech");
+      // const segment2 = new Segment(10, 20, "Discussion about technology");
+      //segment1.text = "Updated text for segment 1";
+
+      let lastSegmentId = 0;
+
+      function generateUniqueId() {
+        lastSegmentId += 1;
+        return `segment${lastSegmentId}`;
+      }
+
+      class Segment {
+        constructor(start_time, end_time, text, id = generateUniqueId()) {
+          if (start_time >= end_time) {
+            throw new Error("End time must be greater than start time");
+          }
+          this.id = id;
+          this.start_time = start_time;
+          this.end_time = end_time;
+          this.text = text;
+        }
+      }
+
+      let appState = {
+        segments: [],
+      };
+
+      function binarySearchInsert(sortedArray, newSegment) {
+        let low = 0;
+        let high = sortedArray.length;
+
+        while (low < high) {
+          const mid = Math.floor((low + high) / 2);
+          if (sortedArray[mid].start_time < newSegment.start_time) {
+            low = mid + 1;
+          } else {
+            high = mid;
+          }
+        }
+
+        sortedArray.splice(low, 0, newSegment);
+      }
+      function updateSegment(segmentId, newStartTime, newEndTime) {
+        const newState = JSON.parse(JSON.stringify(appState));
+        const segmentIndex = newState.segments.findIndex(
+          (seg) => seg.id === segmentId
+        );
+
+        if (segmentIndex !== -1) {
+          const segment = newState.segments[segmentIndex];
+
+          // Validate and update current segment
+          if (newStartTime >= newEndTime) {
+            console.error("End time must be greater than start time");
+            return;
+          }
+
+          segment.start_time = newStartTime;
+          segment.end_time = newEndTime;
+
+          // Adjust previous segment if necessary
+          if (segmentIndex > 0) {
+            const prevSegment = newState.segments[segmentIndex - 1];
+            if (prevSegment.end_time > newStartTime) {
+              prevSegment.end_time = newStartTime;
+            }
+          }
+
+          // Adjust next segment if necessary
+          if (segmentIndex < newState.segments.length - 1) {
+            const nextSegment = newState.segments[segmentIndex + 1];
+            if (nextSegment.start_time < newEndTime) {
+              nextSegment.start_time = newEndTime;
+            }
+          }
+
+          // Update appState and UI
+          executeCommand(new StateCommand(newState));
+        } else {
+          console.error("Segment not found");
+        }
+      }
+
+      function addSegment(start_time, end_time, text) {
+        const newSegment = new Segment(start_time, end_time, text);
+        const newState = JSON.parse(JSON.stringify(appState));
+        binarySearchInsert(newState.segments, newSegment);
+        executeCommand(new StateCommand(newState));
+      }
+
+      function deleteSegment(segmentId) {
+        const newState = JSON.parse(JSON.stringify(appState));
+        newState.segments = newState.segments.filter(
+          (seg) => seg.id !== segmentId
+        );
+        executeCommand(new StateCommand(newState));
+        createTextAreasForSegments();
+      }
+
+      class StateCommand {
+        constructor(newState) {
+          this.previousState = JSON.parse(JSON.stringify(appState));
+          this.newState = newState;
+        }
+
+        execute() {
+          appState = this.newState;
+          updateUI(); // Update the UI based on the new app state
+        }
+
+        undo() {
+          appState = this.previousState;
+          updateUI(); // Revert UI to the previous state
+        }
+      }
+
+      let commandStack = [];
+      let currentCommandIndex = -1;
+
+      function executeCommand(command) {
+        // If we're not at the end of the stack, remove everything after the current command
+        if (currentCommandIndex < commandStack.length - 1) {
+          commandStack.splice(
+            currentCommandIndex + 1,
+            commandStack.length - currentCommandIndex - 1
+          );
+        }
+
+        // Execute the new command and add it to the stack
+        command.execute();
+        commandStack.push(command);
+        currentCommandIndex++;
+      }
+
+      function undo() {
+        if (currentCommandIndex >= 0) {
+          commandStack[currentCommandIndex].undo();
+          currentCommandIndex--;
+        }
+      }
+
+      function redo() {
+        if (currentCommandIndex < commandStack.length - 1) {
+          currentCommandIndex++;
+          commandStack[currentCommandIndex].execute();
+        }
+      }
+
+      function updateUI() {
+        if (!peaksInstance) {
+          console.error("Peaks instance is not initialized");
+          return;
+        }
+
+        // Clear existing Peaks.js segments
+        peaksInstance.segments.removeAll();
+
+        segment_counter = 0;
+
+        // Add new segments from appState to Peaks.js
+        appState.segments.forEach((segment) => {
+          peaksInstance.segments.add({
+            startTime: segment.start_time,
+            endTime: segment.end_time,
+            labelText: segment_counter.toString(),
+            editable: true,
+            id: segment.id, // Ensure each segment has a unique identifier
+          });
+          segment_counter++;
+        });
+        updateVTTContentForVideoPlayer();
+        createTextAreasForSegments();
+      }
+
+      document
+        .querySelector('[data-action="undo"]')
+        .addEventListener("click", function () {
+          undo();
+        });
+
+      document
+        .querySelector('[data-action="redo"]')
+        .addEventListener("click", function () {
+          redo();
+        });
+
+      document
+        .querySelector('[data-action="download-vtt"]')
+        .addEventListener("click", function () {
+          downloadVTT();
+        });
+
+      function downloadVTT() {
+        const vttContent = generateVTTContent(appState.segments);
+        const blob = new Blob([vttContent], { type: "text/vtt" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "subtitles.vtt";
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+
+      var peaksInstance;
+
+      var audioElement = document.getElementById("audio");
+
+      let loadingState = 0;
+      let loadingInterval;
+
+      function startLoadingIndicator() {
+        document.getElementById("loadingIndicator").classList.add("active");
+        loadingInterval = setInterval(() => {
+          loadingState = (loadingState + 1) % 4;
+          let dots = ".".repeat(loadingState);
+          document.getElementById(
+            "loadingIndicator"
+          ).textContent = `Transcription in progress${dots}`;
+        }, 500); // 500ms interval between states
+      }
+
+      function stopLoadingIndicator() {
+        document.getElementById("loadingIndicator").classList.remove("active");
+        clearInterval(loadingInterval);
+      }
+
+      // Using FFmpeg.wasm on uploaded video to strip audio and transcode it to wav format
+      const { fetchFile } = FFmpegUtil;
+      const { FFmpeg } = FFmpegWASM;
+      let ffmpeg = null;
+
+      const split_audio = async ({ target: { files } }) => {
+        const message = document.getElementById("message");
+        if (ffmpeg === null) {
+          ffmpeg = new FFmpeg();
+          ffmpeg.on("log", ({ message }) => {
+            console.log(message);
+          });
+          ffmpeg.on("progress", ({ progress, time }) => {
+            message.innerHTML = `${progress * 100} %, time: ${
+              time / 1000000
+            } s`;
+          });
+          await ffmpeg.load({
+            coreURL: "/assets/core-mt/package/dist/umd/ffmpeg-core.js",
+          });
+        }
+        const { name } = files[0];
+        await ffmpeg.writeFile(name, await fetchFile(files[0]));
+        message.innerHTML = "Start splitting audio";
+        console.time("exec");
+        // ffmpeg -i {inputFileName} -c:a pcm_s16le -ac 1 -ar 16000 -vn -y {outputFileName}.wav
+        await ffmpeg.exec([
+          "-i",
+          name,
+          "-c:a",
+          "pcm_s16le",
+          "-ac",
+          "1",
+          "-ar",
+          "16000",
+          "-vn",
+          "-y",
+          "output.wav",
+        ]);
+        console.timeEnd("exec");
+        message.innerHTML = "Complete audio";
+
+        const wavData = await ffmpeg.readFile("output.wav");
+        const wavFile = new File([wavData.buffer], "output.wav", {
+          type: "audio/wav",
+        });
+
+        audioElement.src = URL.createObjectURL(
+          new Blob([wavData.buffer], { type: "audio/wav" })
+        );
+
+        // Prepare the form data
+        const formData = new FormData();
+        formData.append("audioFile", wavFile);
+
+        startLoadingIndicator();
+
+        // Use fetch to send the file to the server
+        fetch("/upload", {
+          method: "POST",
+          body: formData,
+        })
+          .then((response) => {
+            if (response.ok) {
+              return response.json();
+            }
+            throw new Error("Network response was not ok.");
+          })
+          .then((data) => {
+            console.log("Transcription successful:", data);
+            processJsonTranscript(data); // Pass the JSON data
+          })
+          .catch((error) => {
+            console.error("Error during fetch:", error);
+          });
+      };
+
+      const elm = document.getElementById("uploader");
+      elm.addEventListener("change", split_audio);
+
+      audioElement.addEventListener("loadeddata", function () {
+        console.log("Audio file loaded!");
+
+        (function (Peaks) {
+          var renderSegments = function (peaks) {
+            var segmentsContainer = document.getElementById("segments");
+            var segments = peaks.segments.getSegments();
+            var html = "";
+
+            for (var i = 0; i < segments.length; i++) {
+              var segment = segments[i];
+
+              var row =
+                "<tr>" +
+                "<td>" +
+                segment.id +
+                "</td>" +
+                '<td><input data-action="update-segment-label" type="text" value="' +
+                segment.labelText +
+                '" data-id="' +
+                segment.id +
+                '"/></td>' +
+                '<td><input data-action="update-segment-start-time" type="number" value="' +
+                segment.startTime +
+                '" data-id="' +
+                segment.id +
+                '"/></td>' +
+                '<td><input data-action="update-segment-end-time" type="number" value="' +
+                segment.endTime +
+                '" data-id="' +
+                segment.id +
+                '"/></td>' +
+                "<td>" +
+                '<a href="#' +
+                segment.id +
+                '" data-action="play-segment" data-id="' +
+                segment.id +
+                '">Play</a>' +
+                "</td>" +
+                "<td>" +
+                '<a href="#' +
+                segment.id +
+                '" data-action="loop-segment" data-id="' +
+                segment.id +
+                '">Loop</a>' +
+                "</td>" +
+                "<td>" +
+                '<a href="#' +
+                segment.id +
+                '" data-action="remove-segment" data-id="' +
+                segment.id +
+                '">Remove</a>' +
+                "</td>" +
+                "</tr>";
+
+              html += row;
+            }
+
+            segmentsContainer.querySelector("tbody").innerHTML = html;
+
+            if (html.length) {
+              segmentsContainer.classList.remove("hide");
+            }
+
+            document
+              .querySelectorAll(
+                'input[data-action="update-segment-start-time"]'
+              )
+              .forEach(function (inputElement) {
+                inputElement.addEventListener("input", function (event) {
+                  var element = event.target;
+                  var id = element.getAttribute("data-id");
+                  var segment = peaks.segments.getSegment(id);
+
+                  if (segment) {
+                    var startTime = parseFloat(element.value);
+
+                    if (startTime < 0) {
+                      startTime = 0;
+                      element.value = 0;
+                    }
+
+                    if (startTime >= segment.endTime) {
+                      startTime = segment.endTime - 0.1;
+                      element.value = startTime;
+                    }
+
+                    segment.update({ startTime: startTime });
+                  }
+                });
+              });
+
+            document
+              .querySelectorAll('input[data-action="update-segment-end-time"]')
+              .forEach(function (inputElement) {
+                inputElement.addEventListener("input", function (event) {
+                  var element = event.target;
+                  var id = element.getAttribute("data-id");
+                  var segment = peaks.segments.getSegment(id);
+
+                  if (segment) {
+                    var endTime = parseFloat(element.value);
+
+                    if (endTime < 0) {
+                      endTime = 0;
+                      element.value = 0;
+                    }
+
+                    if (endTime <= segment.startTime) {
+                      endTime = segment.startTime + 0.1;
+                      element.value = endTime;
+                    }
+
+                    segment.update({ endTime: endTime });
+                  }
+                });
+              });
+
+            document
+              .querySelectorAll('input[data-action="update-segment-label"]')
+              .forEach(function (inputElement) {
+                inputElement.addEventListener("input", function (event) {
+                  var element = event.target;
+                  var id = element.getAttribute("data-id");
+                  var segment = peaks.segments.getSegment(id);
+                  var labelText = element.labelText;
+
+                  if (segment) {
+                    segment.update({ labelText: labelText });
+                  }
+                });
+              });
+          };
+
+          var AudioContext = window.AudioContext || window.webkitAudioContext;
+          var audioContext = new AudioContext();
+
+          var options = {
+            zoomview: {
+              container: document.getElementById("zoomview-container"),
+            },
+            overview: {
+              container: document.getElementById("overview-container"),
+            },
+            mediaElement: audioElement,
+            webAudio: {
+              audioContext: audioContext,
+              scale: 128,
+              multiChannel: false,
+            },
+            keyboard: true,
+            pointMarkerColor: "#006eb0",
+            showPlayheadTime: true,
+            emitCueEvents: true,
+            waveformCache: true,
+            zoomLevels: [128, 256, 512, 1024, 2048, 4096],
+            highlightColor: "#0066FF",
+            segmentOptions: {
+              markers: false,
+              overlay: true,
+              waveformColor: "#0066FF",
+              overlayColor: "#bcbcbc",
+              overlayOpacity: 0.5,
+              overlayBorderColor: "#000000",
+              overlayBorderWidth: 0.7,
+              overlayCornerRadius: 5,
+              overlayOffset: 10,
+              overlayLabelAlign: "left",
+              overlayLabelVerticalAlign: "top",
+              overlayLabelPadding: 8,
+              overlayLabelColor: "#ffffff",
+              overlayFontFamily: "sans-serif",
+              overlayFontSize: 14,
+              overlayFontStyle: "normal",
+            },
+            createSegmentLabel: function () {
+              return null;
+            },
+          };
+
+          Peaks.init(options, function (err, peaksInstanceParameter) {
+            if (err) {
+              console.error(err.message);
+              return;
+            }
+
+            console.log("Peaks instance ready");
+
+            peaksInstance = peaksInstanceParameter;
+
+            peaksInstance.views.getView("zoomview").setMinSegmentDragWidth(50);
+
+            document
+              .querySelector('[data-action="zoom-in"]')
+              .addEventListener("click", function () {
+                peaksInstance.zoom.zoomIn();
+              });
+
+            document
+              .querySelector('[data-action="zoom-out"]')
+              .addEventListener("click", function () {
+                peaksInstance.zoom.zoomOut();
+              });
+
+            document
+              .querySelector('button[data-action="add-segment"]')
+              .addEventListener("click", function () {
+                peaksInstance.segments.add({
+                  startTime: peaksInstance.player.getCurrentTime(),
+                  endTime: peaksInstance.player.getCurrentTime() + 1,
+                  labelText: "",
+                  editable: true,
+                });
+              });
+
+            // document
+            //   .querySelector('button[data-action="log-data"]')
+            //   .addEventListener("click", function (event) {
+            //     renderSegments(peaksInstance);
+            //     renderPoints(peaksInstance);
+            //   });
+
+            document
+              .getElementById("auto-scroll")
+              .addEventListener("change", function (event) {
+                var view = peaksInstance.views.getView("zoomview");
+                view.enableAutoScroll(event.target.checked);
+              });
+
+            document
+              .querySelector("body")
+              .addEventListener("click", function (event) {
+                var element = event.target;
+                var action = element.getAttribute("data-action");
+                var id = element.getAttribute("data-id");
+
+                if (action === "play-segment") {
+                  var segment = peaksInstance.segments.getSegment(id);
+                  peaksInstance.player.playSegment(segment);
+                } else if (action === "loop-segment") {
+                  var segment = peaksInstance.segments.getSegment(id);
+                  peaksInstance.player.playSegment(segment, true);
+                } else if (action === "remove-point") {
+                  peaksInstance.points.removeById(id);
+                } else if (action === "remove-segment") {
+                  peaksInstance.segments.removeById(id);
+                }
+              });
+
+            // Segment events
+
+            peaksInstance.on("segments.add", function (event) {
+              console.log("segments.add:", event);
+            });
+
+            peaksInstance.on("segments.insert", function (event) {
+              console.log("segments.insert:", event);
+            });
+
+            peaksInstance.on("segments.dragstart", function (event) {
+              console.log("segments.dragstart:", event);
+            });
+
+            peaksInstance.on("segments.dragend", function (event) {
+              console.log("segments.dragend:", event);
+
+              const draggedSegment = event.segment;
+              const segmentId = draggedSegment.id;
+              const newStartTime = draggedSegment.startTime;
+              const newEndTime = draggedSegment.endTime;
+
+              // Update the segment in appState
+              updateSegment(segmentId, newStartTime, newEndTime);
+            });
+
+            peaksInstance.on("segments.dragged", function (event) {
+              console.log("segments.dragged:", event);
+            });
+
+            peaksInstance.on("segments.mouseenter", function (event) {
+              console.log("segments.mouseenter:", event);
+            });
+
+            peaksInstance.on("segments.mouseleave", function (event) {
+              console.log("segments.mouseleave:", event);
+            });
+
+            peaksInstance.on("segments.mousedown", function (event) {
+              console.log("segments.mousedown:", event);
+            });
+
+            peaksInstance.on("segments.mouseup", function (event) {
+              console.log("segments.mouseup:", event);
+            });
+
+            peaksInstance.on("segments.click", function (event) {
+              console.log("segments.click:", event);
+            });
+
+            peaksInstance.on("segments.dblclick", function (event) {
+              console.log("segments.dblclick:", event);
+            });
+
+            peaksInstance.on("segments.contextmenu", function (event) {
+              event.evt.preventDefault();
+
+              console.log("segments.contextmenu:", event);
+            });
+
+            // Zoomview waveform events
+
+            peaksInstance.on("zoomview.click", function (event) {
+              console.log("zoomview.click:", event);
+            });
+
+            peaksInstance.on("zoomview.dblclick", function (event) {
+              console.log("zoomview.dblclick:", event);
+            });
+
+            peaksInstance.on("zoomview.contextmenu", function (event) {
+              event.evt.preventDefault();
+
+              console.log("zoomview.contextmenu:", event);
+            });
+
+            // Overview waveform events
+
+            peaksInstance.on("overview.click", function (event) {
+              console.log("overview.click:", event);
+            });
+
+            peaksInstance.on("overview.dblclick", function (event) {
+              console.log("overview.dblclick:", event);
+            });
+
+            peaksInstance.on("overview.contextmenu", function (event) {
+              event.evt.preventDefault();
+
+              console.log("overview.contextmenu:", event);
+            });
+
+            // Player events
+
+            var myvideo = document.getElementById("videoPlayer");
+
+            peaksInstance.on("player.timeupdate", updateSegmentColor);
+
+            peaksInstance.on("player.seeked", function (time) {
+              myvideo.currentTime = time;
+              myvideo.onseeked = function () {
+                if (!myvideo.paused) {
+                  myvideo.play();
+                }
+              };
+              console.log("player.seeked:", time);
+            });
+
+            peaksInstance.on("player.playing", function (time) {
+              myvideo.currentTime = time;
+              myvideo.onseeked = function () {
+                myvideo.play();
+              };
+              console.log("player.playing:", time);
+            });
+
+            peaksInstance.on("player.pause", function (time) {
+              myvideo.pause();
+              console.log("player.pause:", time);
+            });
+
+            peaksInstance.on("player.ended", function () {
+              console.log("player.ended");
+            });
+          });
+        })(peaks);
+      });
+
+      audioElement.addEventListener("error", function () {
+        console.log("Error loading the audio file.");
+      });
+
+      // Function to update segment color
+      function updateSegmentColor() {
+        const currentTime = peaksInstance.player.getCurrentTime();
+
+        var segments = peaksInstance.segments.getSegments();
+
+        for (var i = 0; i < segments.length; i++) {
+          var segment = segments[i];
+          if (
+            currentTime >= segment.startTime &&
+            currentTime <= segment.endTime
+          ) {
+            // Change color when playhead is within the segment
+            segment.update({ color: "#0066FF" });
+          } else {
+            // Revert to original color when playhead leaves the segment
+            segment.update({ color: "#bcbcbc" });
+          }
+        }
+      }
+
+      var vttTimestamps = []; // Array to store timestamps and positions
+
+      document
+        .getElementById("videoPlayer")
+        .addEventListener("timeupdate", autoScrollTextArea);
+
+      function loadVideoFile(event) {
+        var file = event.target.files[0];
+        if (file) {
+          var url = URL.createObjectURL(file);
+          var videoPlayer = document.getElementById("videoPlayer");
+          videoPlayer.src = url;
+          videoPlayer.load();
+
+          // Hide the video file section
+          document.getElementById("videoFileSection").style.display = "none";
+        }
+      }
+
+      function processJsonTranscript(jsonData) {
+        jsonData.transcription.forEach((entry) => {
+          const startTime = entry.offsets.from / 1000;
+          const endTime = entry.offsets.to / 1000;
+          const text = entry.text;
+
+          const newSegment = new Segment(startTime, endTime, text);
+          appState.segments.push(newSegment);
+        });
+
+        stopLoadingIndicator();
+
+        // After updating appState, create text areas for the new segments
+        createTextAreasForSegments();
+
+        // Update the UI to reflect the new segments
+        updateUI();
+      }
+
+      function formatTime(seconds) {
+        // Extract hours, minutes, seconds, and milliseconds
+        const hours = Math.floor(seconds / 3600);
+        seconds %= 3600;
+        const minutes = Math.floor(seconds / 60);
+        const secs = Math.floor(seconds % 60);
+        const millis = Math.floor((seconds % 1) * 1000);
+
+        // Format each component to ensure two digits for hours, minutes, and seconds,
+        // and three digits for milliseconds
+        const formattedHours = hours.toString().padStart(2, "0");
+        const formattedMinutes = minutes.toString().padStart(2, "0");
+        const formattedSeconds = secs.toString().padStart(2, "0");
+        const formattedMillis = millis.toString().padStart(3, "0");
+
+        return `${formattedHours}:${formattedMinutes}:${formattedSeconds}.${formattedMillis}`;
+      }
+
+      function autoScrollTextArea() {
+        const videoPlayer = document.getElementById("videoPlayer");
+        const currentTime = videoPlayer.currentTime;
+
+        let closestSegmentIndex = -1;
+        let minPositiveTimeDifference = Number.POSITIVE_INFINITY;
+
+        appState.segments.forEach((segment, index) => {
+          const timeDifference = currentTime - segment.start_time;
+          if (
+            timeDifference >= 0 &&
+            timeDifference < minPositiveTimeDifference
+          ) {
+            closestSegmentIndex = index;
+            minPositiveTimeDifference = timeDifference;
+          }
+        });
+
+        if (closestSegmentIndex !== -1) {
+          const textAreaId = `segment-text-${appState.segments[closestSegmentIndex].id}`;
+          const textArea = document.getElementById(textAreaId);
+
+          if (textArea) {
+            document
+              .querySelectorAll(".current-timestamp")
+              .forEach((element) => {
+                element.classList.remove("current-timestamp");
+              });
+
+            textArea.classList.add("current-timestamp");
+            textArea.scrollIntoView({
+              behavior: "smooth",
+              block: "center",
+            });
+          }
+        }
+      }
+
+      function updateVTTContentForVideoPlayer() {
+        const videoPlayer = document.getElementById("videoPlayer");
+        let videoTrack = videoPlayer.querySelector("track[kind='subtitles']");
+
+        // Remove existing track if it exists
+        if (videoTrack) {
+          videoPlayer.removeChild(videoTrack);
+        }
+
+        // Create and append a new video track for subtitles
+        videoTrack = document.createElement("track");
+        videoTrack.kind = "subtitles";
+        videoTrack.label = "English";
+        videoTrack.srclang = "en";
+        const vttContent = generateVTTContent(appState.segments);
+        const vttBlob = new Blob([vttContent], { type: "text/vtt" });
+        videoTrack.src = URL.createObjectURL(vttBlob);
+        videoPlayer.appendChild(videoTrack);
+
+        // Reload the video player to apply changes
+        videoPlayer.load();
+
+        // Ensure captions are turned on
+        if (videoPlayer.textTracks[0]) {
+          videoPlayer.textTracks[0].mode = "showing";
+        }
+      }
+
+      function updateSegmentText(segmentId, newText) {
+        const newState = JSON.parse(JSON.stringify(appState));
+        const segment = newState.segments.find((seg) => seg.id === segmentId);
+        if (segment) {
+          segment.text = newText;
+          executeCommand(new StateCommand(newState));
+          updateVTTContentForVideoPlayer();
+        }
+      }
+
+      function generateVTTContent(segments) {
+        let vttContent = "WEBVTT\n\n";
+        segments.forEach((segment) => {
+          const startTime = formatTime(segment.start_time);
+          const endTime = formatTime(segment.end_time);
+          vttContent += `${startTime} --> ${endTime}\n${segment.text}\n\n`;
+        });
+        return vttContent;
+      }
+
+      function createTextAreasForSegments() {
+        const vttContainer = document.getElementById("vttContainer");
+        vttContainer.innerHTML = ""; // Clear existing content
+
+        appState.segments.forEach((segment, index) => {
+          const rowDiv = document.createElement("div");
+          rowDiv.className = "segment-row";
+
+          // Create button container
+          const buttonContainer = document.createElement("div");
+          buttonContainer.className = "button-container";
+
+          // Create buttons
+          const addButtonAbove = createButton("↑", () =>
+            addSegmentAbove(index)
+          );
+          const addButtonBelow = createButton("↓", () =>
+            addSegmentBelow(index)
+          );
+          const deleteButton = createButton("Delete", () =>
+            deleteSegment(segment.id)
+          );
+
+          // Add buttons to button container
+          buttonContainer.appendChild(addButtonAbove);
+          buttonContainer.appendChild(addButtonBelow);
+
+          // Create text area
+          const textArea = document.createElement("textarea");
+          textArea.value = segment.text;
+          textArea.id = `segment-text-${segment.id}`;
+
+          textArea.addEventListener("input", function () {
+            updateSegmentText(segment.id, textArea.value);
+          });
+
+          // Add button container and text area to row
+          rowDiv.appendChild(buttonContainer);
+          rowDiv.appendChild(textArea);
+          rowDiv.appendChild(deleteButton);
+
+          vttContainer.appendChild(rowDiv);
+        });
+      }
+
+      function createButton(text, onClick) {
+        const button = document.createElement("button");
+        button.textContent = text;
+        button.onclick = onClick;
+        return button;
+      }
+
+      function addSegmentAbove(index) {
+        // Logic to add a segment above the current segment
+        console.log("Adding segment above index:", index);
+        // Implement the logic to add a new segment above the current one
+      }
+
+      function addSegmentBelow(index) {
+        // Logic to add a segment below the current segment
+        console.log("Adding segment below index:", index);
+        // Implement the logic to add a new segment below the current one
+      }
+    </script>
+  </body>
+</html>

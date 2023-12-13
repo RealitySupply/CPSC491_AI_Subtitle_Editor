@@ -1,0 +1,23 @@
+{
+  "name": "ai_subtitle_editor",
+  "version": "1.0.0",
+  "description": "A tool that uses OpenAI's Whisper model to generate subtitles for video. It allows the user to edit and export the subtitles as a VTT subtitle file.",
+  "private": true,
+  "scripts": {
+    "download": "node ./scripts/download-assets.js",
+    "prestart": "npm run download",
+    "start": "node server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Jason Meadows",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "multer": "^1.4.5-lts.1",
+    "peaks.js": "^3.2.1",
+    "serve-index": "^1.9.1",
+    "shelljs": "^0.8.5",
+    "tar": "^6.2.0"
+  },
+  "main": "server.js"
+}
