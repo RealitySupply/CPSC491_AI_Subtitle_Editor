@@ -20,7 +20,7 @@ This project aims to develop a browser-based application that utilizes OpenAI's 
 git clone https://github.com/SoundandPicture/CPSC491_AI_Subtitle_Editor
 ```
 
-3. Navigate to the project directory:
+2. Navigate to the project directory:
 ```
 cd ai_subtitle
 ```
