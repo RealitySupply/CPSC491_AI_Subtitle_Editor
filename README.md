@@ -1,7 +1,7 @@
 #  AI Subtitle Generator and Editor
 
 ## Introduction
-This project aims to develop a browser-based application that utilizes OpenAI's Whisper model to efficiently process audio from videos, generating transcripts and video subtitle files. The goal is to enhance accessibility by providing high-quality captions, ensuring privacy by processing data locally (still an in-progress feature), and also offering an option for server-based processing for faster results. Completed for CPSC 491 at CSUF. 
+This project aims to develop a browser-based application that utilizes OpenAI's Whisper model to generate high-quality transcripts and video subtitle files. The goal is to enhance accessibility by making it easier to make and edit captions. Another goal is ensuring privacy by processing data locally (still an in-progress feature), while also offering an option for server-based processing for faster results. Completed for CPSC 491 at CSUF. 
 
 ## Features
 - Automatic transcription/subtitle generation using OpenAI's Whisper model.
